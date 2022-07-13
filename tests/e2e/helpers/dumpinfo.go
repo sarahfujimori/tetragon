@@ -15,11 +15,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cilium/cilium-e2e/pkg/e2ecluster/e2ehelpers"
 	"github.com/cilium/tetragon/tests/e2e/checker"
 	"github.com/cilium/tetragon/tests/e2e/flags"
 	"github.com/cilium/tetragon/tests/e2e/state"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/e2e-framework/klient"
 	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
@@ -82,6 +84,7 @@ func MaybeDumpInfo(keepRegardless bool) TestEnvFunc {
 			if err := extractLogs(&pod, dir, false); err != nil {
 				klog.ErrorS(err, "Failed to extract tetragon logs")
 			}
+			dumpBpftool(ctx, client, dir, pod.Namespace, pod.Name, TetragonContainerName)
 		}
 
 		return ctx, nil
@@ -196,4 +199,53 @@ func dumpMetrics(port string, podName string, exportDir string) {
 	if err := os.WriteFile(fname, buff.Bytes(), os.FileMode(0o644)); err != nil {
 		klog.ErrorS(err, "failed to write to metrics file", "file", fname, "addr", metricsAddr)
 	}
+}
+
+// dumpBpftool dumps bpftool progs and maps for a pod
+func dumpBpftool(ctx context.Context, client klient.Client, exportDir, podNamespace, podName, containerName string) {
+	if err := runBpftool(ctx, client, exportDir, fmt.Sprintf("tetragon.%s.progs", podName), podNamespace, podName, containerName, "prog", "show"); err != nil {
+		klog.ErrorS(err, "failed to dump programs", "pod", podName, "namespace", podNamespace)
+	}
+	if err := runBpftool(ctx, client, exportDir, fmt.Sprintf("tetragon.%s.maps", podName), podNamespace, podName, containerName, "map", "show"); err != nil {
+		klog.ErrorS(err, "failed to dump maps", "pod", podName, "namespace", podNamespace)
+	}
+	if err := runBpftool(ctx, client, exportDir, fmt.Sprintf("tetragon.%s.cgroups", podName), podNamespace, podName, containerName, "cgroup", "tree"); err != nil {
+		klog.ErrorS(err, "failed to dump cgroup tree", "pod", podName, "namespace", podNamespace)
+	}
+}
+
+func runBpftool(ctx context.Context, client klient.Client, exportDir, fname, podNamespace, podName, containerName string, args ...string) error {
+	cmd := append([]string{"bpftool"}, args...)
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	if err := e2ehelpers.ExecInPod(ctx,
+		client,
+		podNamespace,
+		podName,
+		containerName,
+		stdout,
+		stderr,
+		cmd); err != nil {
+		return fmt.Errorf("failed to run %s: %w", cmd, err)
+	}
+
+	var err error
+	buff := new(bytes.Buffer)
+	buff.WriteString("-------------------- stdout starts here --------------------\n")
+	if _, err = buff.ReadFrom(stdout); err != nil {
+		klog.ErrorS(err, "error reading stdout", "cmd", cmd)
+	}
+	buff.WriteString("-------------------- stderr starts here --------------------\n")
+	if _, err = buff.ReadFrom(stderr); err != nil {
+		klog.ErrorS(err, "error reading stdout", "cmd", cmd)
+	}
+	buff.WriteString("------------------------------------------------------------\n")
+
+	fname = filepath.Join(exportDir, fname)
+	if err := os.WriteFile(fname, buff.Bytes(), os.FileMode(0o644)); err != nil {
+		klog.ErrorS(err, "failed to write to bpftool output file", "file", fname)
+	}
+
+	return nil
 }
