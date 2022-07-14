@@ -567,15 +567,15 @@ __filter_file_buf(char *value, char *args, __u32 op)
 		if (a < v)
 			goto skip_string;
 	} else if (op == op_filter_str_postfix) {
-#ifdef __LARGE_BPF_PROG
-		err = cmpbytes(&value[4], &args[4], v - 1);
-#else
-		err = cmpbytes_small(&value[4], &args[4], v - 1);
-#endif
+		err = rcmpbytes(&value[4], &args[4], v - 1, a - 1);
 		if (!err)
 			return 0;
 	}
-	err = rcmpbytes(&value[4], &args[4], v - 1, a - 1);
+#ifdef __LARGE_BPF_PROG
+	err = cmpbytes(&value[4], &args[4], v - 1);
+#else
+	err = cmpbytes_small(&value[4], &args[4], v - 1);
+#endif
 	if (!err)
 		return 0;
 skip_string:
